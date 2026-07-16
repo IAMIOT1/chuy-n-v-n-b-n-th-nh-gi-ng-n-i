@@ -1,339 +1,287 @@
 import asyncio
 import os
-import threading
-import customtkinter as ctk
-from tkinter import filedialog, messagebox
-import pygame
-from tts_engine import TTSEngine
+import re
+import tempfile
+import time
+import uuid
+import streamlit as st
+import edge_tts
+from gtts import gTTS
+from deep_translator import GoogleTranslator
 
-pygame.mixer.init()
+# --- THIẾT LẬP GIAO DIỆN TRANG WEB ---
+st.set_page_config(
+    page_title="Dịch Thuật & Chuyển Văn Bản Thành Giọng Nói (TTS)",
+    page_icon="🎙️",
+    layout="wide"
+)
 
-ctk.set_appearance_mode("System")
-ctk.set_default_color_theme("blue")
+# --- BỘ TỪ ĐIỂN TIẾNG VIỆT CHO CÁC NGÔN NGỮ ---
+LANG_MAP_TO_VI = {
+    "Afrikaans": "Tiếng Afrikaans", "Albanian": "Tiếng Albania", "Amharic": "Tiếng Amharic",
+    "Arabic": "Tiếng Ả Rập", "Armenian": "Tiếng Armenia", "Assamese": "Tiếng Assamese",
+    "Aymara": "Tiếng Aymara", "Azerbaijani": "Tiếng Azerbaijani", "Bambara": "Tiếng Bambara",
+    "Basque": "Tiếng Basque", "Belarusian": "Tiếng Belarus", "Bengali": "Tiếng Bengali",
+    "Bhojpuri": "Tiếng Bhojpuri", "Bosnian": "Tiếng Bosnia", "Bulgarian": "Tiếng Bulgaria",
+    "Catalan": "Tiếng Catalan", "Cebuano": "Tiếng Cebuano", "Chichewa": "Tiếng Chichewa",
+    "Chinese (Simplified)": "Tiếng Trung (Giản thể)", "Chinese (Traditional)": "Tiếng Trung (Phồn thể)",
+    "Corsican": "Tiếng Corsica", "Croatian": "Tiếng Croatia", "Czech": "Tiếng Séc",
+    "Danish": "Tiếng Đan Mạch", "Dhivehi": "Tiếng Dhivehi", "Dogri": "Tiếng Dogri",
+    "Dutch": "Tiếng Hà Lan", "English": "Tiếng Anh", "Esperanto": "Tiếng Esperanto",
+    "Estonian": "Tiếng Estonia", "Ewe": "Tiếng Ewe", "Filipino": "Tiếng Filipino",
+    "Finnish": "Tiếng Phần Lan", "French": "Tiếng Pháp", "Frisian": "Tiếng Frisian",
+    "Galician": "Tiếng Galicia", "Georgian": "Tiếng Gruzia (Georgia)", "German": "Tiếng Đức",
+    "Greek": "Tiếng Hy Lạp", "Guarani": "Tiếng Guarani", "Gujarati": "Tiếng Gujarati",
+    "Haitian Creole": "Tiếng Creole Haiti", "Hausa": "Tiếng Hausa", "Hawaiian": "Tiếng Hawaii",
+    "Hebrew": "Tiếng Do Thái", "Hindi": "Tiếng Ấn Độ (Hindi)", "Hmong": "Tiếng H'Mông",
+    "Hungarian": "Tiếng Hung-ga-ry", "Icelandic": "Tiếng Iceland", "Igbo": "Tiếng Igbo",
+    "Ilocano": "Tiếng Ilocano", "Indonesian": "Tiếng Indonesia", "Irish": "Tiếng Ireland",
+    "Italian": "Tiếng Ý", "Japanese": "Tiếng Nhật", "Javanese": "Tiếng Java",
+    "Kannada": "Tiếng Kannada", "Kazakh": "Tiếng Kazakh", "Khmer": "Tiếng Khmer",
+    "Kinyarwanda": "Tiếng Kinyarwanda", "Konkani": "Tiếng Konkani", "Korean": "Tiếng Hàn",
+    "Krio": "Tiếng Krio", "Kurdish (Kurmanji)": "Tiếng Kurd (Kurmanji)", "Kurdish (Sorani)": "Tiếng Kurd (Sorani)",
+    "Kyrgyz": "Tiếng Kyrgyz", "Lao": "Tiếng Lào", "Latin": "Tiếng Latin",
+    "Latvian": "Tiếng Latvia", "Lingala": "Tiếng Lingala", "Lithuanian": "Tiếng Lithuania",
+    "Luganda": "Tiếng Luganda", "Luxembourgish": "Tiếng Luxembourg", "Macedonian": "Tiếng Macedonia",
+    "Maithili": "Tiếng Maithili", "Malagasy": "Tiếng Malagasy", "Malay": "Tiếng Mã Lai",
+    "Malayalam": "Tiếng Malayalam", "Maltese": "Tiếng Malta", "Maori": "Tiếng Maori",
+    "Marathi": "Tiếng Marathi", "Meiteilon (Manipuri)": "Tiếng Meiteilon", "Mizo": "Tiếng Mizo",
+    "Mongolian": "Tiếng Mông Cổ", "Myanmar (Burmese)": "Tiếng Myanmar (Miến Điện)", "Nepali": "Tiếng Nepal",
+    "Norwegian": "Tiếng Na Uy", "Odia (Oriya)": "Tiếng Odia", "Oromo": "Tiếng Oromo",
+    "Pashto": "Tiếng Pashto", "Persian": "Tiếng Ba Tư", "Polish": "Tiếng Ba Lan",
+    "Portuguese": "Tiếng Bồ Đào Nha", "Punjabi": "Tiếng Punjabi", "Quechua": "Tiếng Quechua",
+    "Romanian": "Tiếng Romania", "Russian": "Tiếng Nga", "Samoan": "Tiếng Samoa",
+    "Sanskrit": "Tiếng Phạn", "Scots Gaelic": "Tiếng Gaelic Scotland", "Sepedi": "Tiếng Sepedi",
+    "Serbian": "Tiếng Serbia", "Sesotho": "Tiếng Sesotho", "Shona": "Tiếng Shona",
+    "Sindhi": "Tiếng Sindhi", "Sinhala": "Tiếng Sinhala", "Slovak": "Tiếng Slovakia",
+    "Slovenian": "Tiếng Slovenia", "Somali": "Tiếng Somali", "Spanish": "Tiếng Tây Ban Nha",
+    "Sundanese": "Tiếng Sunda", "Swahili": "Tiếng Swahili", "Swedish": "Tiếng Thụy Điển",
+    "Tajik": "Tiếng Tajik", "Tamil": "Tiếng Tamil", "Tatar": "Tiếng Tatar",
+    "Telugu": "Tiếng Telugu", "Thai": "Tiếng Thái", "Tigrinya": "Tiếng Tigrinya",
+    "Tsonga": "Tiếng Tsonga", "Turkish": "Tiếng Thổ Nhĩ Kỳ", "Turkmen": "Tiếng Turkmen",
+    "Twi": "Tiếng Twi", "Ukrainian": "Tiếng Ukraine", "Urdu": "Tiếng Urdu",
+    "Uyghur": "Tiếng Duy Ngô Nhĩ", "Uzbek": "Tiếng Uzbek", "Vietnamese": "Tiếng Việt",
+    "Welsh": "Tiếng Wales", "Xhosa": "Tiếng Xhosa", "Yiddish": "Tiếng Yiddish",
+    "Yoruba": "Tiếng Yoruba", "Zulu": "Tiếng Zulu"
+}
 
+# --- CÁC HÀM XỬ LÝ LOGIC (CHUYỂN ĐỔI, DỊCH THUẬT) ---
 
-class TTSApp(ctk.CTk):
+@st.cache_data
+def get_supported_languages():
+    """Lấy danh sách ngôn ngữ dịch thuật đã được Việt hóa."""
+    langs = GoogleTranslator().get_supported_languages(as_dict=True)
+    vietnamese_langs = {}
+    for eng_name, code in langs.items():
+        formatted_eng_name = eng_name.title()
+        vi_name = LANG_MAP_TO_VI.get(formatted_eng_name, formatted_eng_name)
+        vietnamese_langs[vi_name] = code
+    return vietnamese_langs
 
-    def __init__(self):
-        super().__init__()
-        self.title("Dịch thuật & Chuyển Văn Bản Thành Giọng Nói (TTS)")
-        self.geometry("980x750")
+async def get_all_edge_voices():
+    """Lấy toàn bộ giọng nói của Microsoft Edge."""
+    all_voices = await edge_tts.VoicesManager.create()
+    return all_voices.voices
 
-        self.raw_voices = []
-        self.voices_dict = {}
-        self.supported_langs = {}
-        self.is_playing_preview = False
-        self.preview_file_path = None
-        
-        self.setup_ui()
-        self.load_languages_and_voices()
+def get_google_vietnamese_voices():
+    """Lấy danh sách các giọng tiếng Việt của Google."""
+    google_voices = {}
+    for i in range(1, 11):
+        google_voices[f"Google Voice - Giọng Nữ Miền Bắc {i}"] = f"google-vi-f-north-{i}"
+        google_voices[f"Google Voice - Giọng Nam Miền Bắc {i}"] = f"google-vi-m-north-{i}"
+    for i in range(1, 11):
+        google_voices[f"Google Voice - Giọng Nữ Miền Nam {i}"] = f"google-vi-f-south-{i}"
+        google_voices[f"Google Voice - Giọng Nam Miền Nam {i}"] = f"google-vi-m-south-{i}"
+    return google_voices
 
-    def setup_ui(self):
-        self.lbl_title = ctk.CTkLabel(
-            self,
-            text="TRANSLATION & TEXT TO SPEECH PRO",
-            font=ctk.CTkFont(size=22, weight="bold"),
-        )
-        self.lbl_title.pack(pady=15)
-
-        # Thanh cấu hình dịch thuật
-        self.frame_trans_ctrl = ctk.CTkFrame(self)
-        self.frame_trans_ctrl.pack(fill="x", padx=20, pady=5)
-
-        self.lbl_trans = ctk.CTkLabel(self.frame_trans_ctrl, text="Ngôn ngữ đích (Dịch sang):", text_color="gray")
-        self.lbl_trans.pack(side="left", padx=10, pady=10)
-
-        self.combo_lang = ctk.CTkComboBox(
-            self.frame_trans_ctrl, 
-            values=["Đang tải ngôn ngữ..."], 
-            width=220,
-            command=self.on_language_change
-        )
-        self.combo_lang.pack(side="left", padx=10, pady=10)
-
-        self.btn_translate = ctk.CTkButton(
-            self.frame_trans_ctrl,
-            text="🔄 Dịch văn bản",
-            width=150,
-            fg_color="#3498db",
-            hover_color="#2980b9",
-            command=self.start_translation,
-        )
-        self.btn_translate.pack(side="left", padx=10, pady=10)
-
-        # KHU VỰC CHIA ĐÔI
-        self.frame_split_input = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_split_input.pack(fill="both", expand=True, padx=20, pady=10)
-        
-        self.frame_split_input.grid_columnconfigure(0, weight=1, uniform="group1")
-        self.frame_split_input.grid_columnconfigure(1, weight=1, uniform="group1")
-        self.frame_split_input.grid_rowconfigure(0, weight=1)
-
-        # Văn bản gốc
-        self.frame_left = ctk.CTkFrame(self.frame_split_input)
-        self.frame_left.grid(row=0, column=0, padx=(0, 10), sticky="nsew")
-        
-        self.lbl_left_title = ctk.CTkLabel(self.frame_left, text="VĂN BẢN GỐC (BẤT KỲ NGÔN NGỮ NÀO)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#3498db")
-        self.lbl_left_title.pack(anchor="w", padx=15, pady=(10, 5))
-
-        self.txt_input = ctk.CTkTextbox(self.frame_left, font=ctk.CTkFont(size=14), height=280)
-        self.txt_input.pack(fill="both", expand=True, padx=15, pady=(0, 15))
-        self.txt_input.insert("0.0", "Nhập hoặc dán văn bản gốc vào đây để dịch...")
-
-        # Văn bản dịch
-        self.frame_right = ctk.CTkFrame(self.frame_split_input)
-        self.frame_right.grid(row=0, column=1, padx=(10, 0), sticky="nsew")
-        
-        self.lbl_right_title = ctk.CTkLabel(self.frame_right, text="BẢN DỊCH (GIỌNG ĐỌC SẼ PHÁT TỪ ĐÂY)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#2ecc71")
-        self.lbl_right_title.pack(anchor="w", padx=15, pady=(10, 5))
-
-        self.txt_translated = ctk.CTkTextbox(self.frame_right, font=ctk.CTkFont(size=14), height=280)
-        self.txt_translated.pack(fill="both", expand=True, padx=15, pady=(0, 15))
-        self.txt_translated.insert("0.0", "Kết quả dịch sẽ xuất hiện tại đây...")
-
-        # KHU VỰC CẤU HÌNH GIỌNG ĐỌC
-        self.frame_voice = ctk.CTkFrame(self)
-        self.frame_voice.pack(fill="x", padx=20, pady=5)
-
-        self.lbl_voice = ctk.CTkLabel(self.frame_voice, text="Chọn giọng đọc chuẩn ngữ cảnh:", text_color="gray")
-        self.lbl_voice.pack(side="left", padx=10, pady=10)
-
-        self.combo_voice = ctk.CTkComboBox(self.frame_voice, width=500)
-        self.combo_voice.pack(side="left", padx=10, pady=10)
-
-        self.btn_preview = ctk.CTkButton(
-            self.frame_voice,
-            text="🔊 Nghe thử bản dịch",
-            width=160,
-            fg_color="#2ecc71",
-            hover_color="#27ae60",
-            command=self.start_preview,
-        )
-        self.btn_preview.pack(side="left", padx=10, pady=10)
-
-        # Tiến độ
-        self.lbl_status = ctk.CTkLabel(
-            self,
-            text="Đang khởi tạo hệ thống...",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="gray",
-        )
-        self.lbl_status.pack(pady=5)
-
-        self.progress_bar = ctk.CTkProgressBar(self, width=940)
-        self.progress_bar.pack(padx=20, pady=5)
-        self.progress_bar.set(0)
-
-        self.btn_convert = ctk.CTkButton(
-            self,
-            text="Xuất bản dịch ra file MP3",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            height=45,
-            command=self.start_conversion,
-        )
-        self.btn_convert.pack(pady=15)
-
-    def load_languages_and_voices(self):
-        def target():
-            try:
-                # 1. Tải danh sách ngôn ngữ dịch thuật
-                self.supported_langs = TTSEngine.get_supported_languages()
-                lang_names = sorted(list(self.supported_langs.keys()))
-                self.combo_lang.configure(values=lang_names)
-                
-                default_lang = "Tiếng Việt"
-                if "Tiếng Việt" in lang_names:
-                    self.combo_lang.set("Tiếng Việt")
-                elif lang_names:
-                    self.combo_lang.set(lang_names[0])
-                    default_lang = lang_names[0]
-
-                # 2. Tải toàn bộ danh sách giọng nói Microsoft Edge TTS
-                self.raw_voices = asyncio.run(TTSEngine.get_all_voices())
-                
-                # Cập nhật danh sách giọng nói ban đầu
-                self.filter_voices_by_lang(default_lang)
-                self.lbl_status.configure(text="Hệ thống đã sẵn sàng!", text_color="gray")
-            except Exception as e:
-                self.lbl_status.configure(text=f"Lỗi khởi tạo hệ thống: {e}", text_color="red")
-                
-        threading.Thread(target=target, daemon=True).start()
-
-    def filter_voices_by_lang(self, lang_name):
-        """Tự động quét và gom toàn bộ giọng Edge-TTS lẫn các giọng đọc mới từ Google."""
-        lang_code = self.supported_langs.get(lang_name)
-        if not lang_code or not self.raw_voices:
-            return
-
-        self.voices_dict = {}
-
-        # 1. Lọc các giọng đọc của Edge-TTS
-        for voice in self.raw_voices:
-            voice_locale = voice["Locale"].lower()
-            voice_lang_prefix = voice_locale.split('-')[0]
-            if voice_lang_prefix == lang_code.lower():
-                self.voices_dict[voice["FriendlyName"]] = voice["Name"]
-
-        # 2. Nếu là Tiếng Việt, nạp thêm bộ 20 giọng chất lượng cao của Google
-        if lang_name == "Tiếng Việt" or lang_code.lower() == "vi":
-            google_vietnamese = TTSEngine.get_google_vietnamese_voices()
-            self.voices_dict.update(google_vietnamese)
-
-        voice_names = sorted(list(self.voices_dict.keys()))
-        self.combo_voice.configure(values=voice_names)
-        
-        if voice_names:
-            self.combo_voice.set(voice_names[0])
-            self.lbl_status.configure(
-                text=f"Tìm thấy {len(voice_names)} giọng đọc khả dụng cho ngôn ngữ: {lang_name}.", 
-                text_color="gray"
-            )
+def split_text(text, max_chars=800):
+    """Chia nhỏ văn bản tránh lỗi giới hạn ký tự API."""
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    chunks = []
+    current_chunk = ""
+    for sentence in sentences:
+        if len(current_chunk) + len(sentence) < max_chars:
+            current_chunk += " " + sentence
         else:
-            self.combo_voice.set("Không tìm thấy giọng phù hợp")
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = sentence
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    return chunks
 
-    def on_language_change(self, selected_lang):
-        self.filter_voices_by_lang(selected_lang)
+async def convert_text_to_speech(text, voice_id, progress_bar, status_text):
+    """Chuyển đổi văn bản lớn sang MP3 (Hỗ trợ cả Edge và Google TTS) kèm thanh tiến trình."""
+    chunks = split_text(text)
+    total_chunks = len(chunks)
+    temp_files = []
+    
+    for i, chunk in enumerate(chunks):
+        if not chunk:
+            continue
+        
+        # Tạo file tạm thời cho từng đoạn
+        temp_f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        temp_f_path = temp_f.name
+        temp_f.close()
+        
+        if voice_id.startswith("google-"):
+            # Chạy Google TTS
+            tts = gTTS(text=chunk, lang="vi", slow=False)
+            tts.save(temp_f_path)
+        else:
+            # Chạy Edge TTS
+            communicate = edge_tts.Communicate(chunk, voice_id)
+            await communicate.save(temp_f_path)
+            
+        temp_files.append(temp_f_path)
+        
+        # Cập nhật tiến trình chạy thực tế trên Web
+        percent = int(((i + 1) / total_chunks) * 100)
+        progress_bar.progress(percent / 100)
+        status_text.text(f"Đang tạo giọng nói... {percent}%")
 
-    def start_translation(self):
-        text = self.txt_input.get("0.0", "end").strip()
-        if not text or text == "Nhập hoặc dán văn bản gốc vào đây để dịch...":
-            messagebox.showwarning("Thông báo", "Vui lòng nhập văn bản gốc ở ô bên trái!")
-            return
-
-        target_lang = self.combo_lang.get()
-        lang_code = self.supported_langs.get(target_lang)
-
-        if not lang_code:
-            messagebox.showerror("Lỗi", "Không xác định được mã ngôn ngữ đích!")
-            return
-
-        self.btn_translate.configure(state="disabled", text="⌛ Đang dịch...")
-        self.lbl_status.configure(text="Đang kết nối dịch thuật toàn cầu...", text_color="#3498db")
-
-        def target():
+    # Gộp các chi tiết mp3 lại thành một file duy nhất
+    combined_audio = b""
+    for path in temp_files:
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                combined_audio += f.read()
             try:
-                translated = TTSEngine.translate_text(text, lang_code)
-                self.txt_translated.delete("0.0", "end")
-                self.txt_translated.insert("0.0", translated)
-                self.lbl_status.configure(text="Đã dịch xong! Bạn có thể nghe thử hoặc xuất file MP3.", text_color="#2ecc71")
-            except Exception as e:
-                messagebox.showerror("Lỗi dịch thuật", f"Có lỗi xảy ra: {e}")
-                self.lbl_status.configure(text="Dịch thất bại", text_color="red")
-            finally:
-                self.btn_translate.configure(state="normal", text="🔄 Dịch văn bản")
-
-        threading.Thread(target=target, daemon=True).start()
-
-    def start_preview(self):
-        if self.is_playing_preview:
-            pygame.mixer.music.stop()
-            pygame.mixer.music.unload()
-            self.btn_preview.configure(text="🔊 Nghe thử bản dịch", fg_color="#2ecc71")
-            self.is_playing_preview = False
-            self.cleanup_preview_file()
-            return
-
-        selected_friendly = self.combo_voice.get()
-        voice_id = self.voices_dict.get(selected_friendly)
-        text_demo = self.txt_translated.get("0.0", "end").strip()
-
-        if not voice_id or not text_demo or text_demo == "Kết quả dịch sẽ xuất hiện tại đây...":
-            messagebox.showwarning("Thông báo", "Chưa có nội dung bản dịch để phát thử!")
-            return
-
-        self.btn_preview.configure(text="⌛ Đang tải...", state="disabled")
-
-        def target():
-            try:
-                import uuid
-                self.preview_file_path = f"preview_{uuid.uuid4().hex[:8]}.mp3"
-                
-                asyncio.run(TTSEngine.preview_voice(text_demo, voice_id, self.preview_file_path))
-                
-                pygame.mixer.music.load(self.preview_file_path)
-                pygame.mixer.music.play()
-
-                self.is_playing_preview = True
-                self.btn_preview.configure(text="⏹ Dừng phát", fg_color="#e74c3c", state="normal")
-
-                while pygame.mixer.music.get_busy() and self.is_playing_preview:
-                    pygame.time.Clock().tick(10)
-
-            except Exception as e:
-                messagebox.showerror("Lỗi", f"Không thể phát: {e}")
-            finally:
-                pygame.mixer.music.stop()
-                pygame.mixer.music.unload()
-                self.cleanup_preview_file()
-                self.btn_preview.configure(text="🔊 Nghe thử bản dịch", fg_color="#2ecc71", state="normal")
-                self.is_playing_preview = False
-
-        threading.Thread(target=target, daemon=True).start()
-
-    def cleanup_preview_file(self):
-        if self.preview_file_path and os.path.exists(self.preview_file_path):
-            try:
-                os.remove(self.preview_file_path)
-                self.preview_file_path = None
-            except PermissionError:
+                os.remove(path)
+            except Exception:
                 pass
+                
+    return combined_audio
 
-    def update_progress(self, percent, eta_seconds):
-        if eta_seconds > 60:
-            minutes = eta_seconds // 60
-            seconds = eta_seconds % 60
-            eta_str = f"{minutes} phút {seconds} giây"
+
+# --- THIẾT KẾ GIAO DIỆN STREAMLIT ---
+
+st.title("🎙️ TRANSLATION & TEXT TO SPEECH PRO")
+st.write("Ứng dụng dịch thuật thông minh kết hợp chuyển đổi văn bản thành giọng nói đa dạng.")
+
+# 1. Tải ngôn ngữ và giọng nói
+supported_langs = get_supported_languages()
+lang_names = sorted(list(supported_langs.keys()))
+
+# Đặt mặc định là tiếng Việt
+default_lang_index = lang_names.index("Tiếng Việt") if "Tiếng Việt" in lang_names else 0
+
+# Tạo bộ lọc cấu hình ngôn ngữ đích
+col_lang, col_action = st.columns([3, 1])
+with col_lang:
+    selected_lang = st.selectbox(
+        "Chọn ngôn ngữ đích cần dịch sang:",
+        options=lang_names,
+        index=default_lang_index
+    )
+    lang_code = supported_langs[selected_lang]
+
+# 2. Lấy danh sách giọng đọc tương ứng
+# Dùng loop bất đồng bộ để quét danh sách giọng Edge
+if "edge_voices" not in st.session_state:
+    try:
+        st.session_state.edge_voices = asyncio.run(get_all_edge_voices())
+    except Exception:
+        st.session_state.edge_voices = []
+
+raw_voices = st.session_state.edge_voices
+voices_dict = {}
+
+# Lọc giọng Edge phù hợp ngôn ngữ
+for voice in raw_voices:
+    voice_locale = voice["Locale"].lower()
+    voice_lang_prefix = voice_locale.split('-')[0]
+    if voice_lang_prefix == lang_code.lower():
+        voices_dict[voice["FriendlyName"]] = voice["Name"]
+
+# Nếu chọn tiếng Việt, nạp thêm 20 giọng Google
+if selected_lang == "Tiếng Việt" or lang_code.lower() == "vi":
+    google_vietnamese = get_google_vietnamese_voices()
+    voices_dict.update(google_vietnamese)
+
+voice_names = sorted(list(voices_dict.keys()))
+
+# --- KHU VỰC NHẬP LIỆU CHIA LÀM HAI CỘT (GIỐNG GOOGLE TRANSLATE) ---
+col_left, col_right = st.columns(2)
+
+with col_left:
+    st.subheader("📝 Văn bản gốc (Bất kỳ ngôn ngữ nào)")
+    input_text = st.text_area(
+        "Nhập nội dung cần dịch tại đây:",
+        placeholder="Nhập hoặc dán văn bản gốc vào đây để dịch...",
+        height=300,
+        label_visibility="collapsed"
+    )
+
+# Nút thực hiện dịch thuật nằm ở giữa
+with col_action:
+    st.write(" ") # Tạo khoảng cách
+    st.write(" ")
+    btn_translate = st.button("🔄 Bắt đầu dịch", use_container_width=True, type="primary")
+
+# Quản lý state để lưu trữ bản dịch tạm thời tránh bị load lại trang
+if "translated_text" not in st.session_state:
+    st.session_state.translated_text = ""
+
+if btn_translate:
+    if not input_text.strip():
+        st.warning("Vui lòng nhập văn bản cần dịch ở cột bên trái trước!")
+    else:
+        with st.spinner("Đang kết nối dịch thuật toàn cầu..."):
+            try:
+                translated = GoogleTranslator(source="auto", target=lang_code).translate(input_text)
+                st.session_state.translated_text = translated
+                st.success("Đã dịch xong!")
+            except Exception as e:
+                st.error(f"Lỗi dịch thuật: {e}")
+
+with col_right:
+    st.subheader("🔠 Bản dịch")
+    translated_text = st.text_area(
+        "Kết quả dịch:",
+        value=st.session_state.translated_text,
+        height=300,
+        label_visibility="collapsed"
+    )
+
+st.write("---")
+
+# --- PHẦN PHÁT HỘP GIỌNG ĐỌC & TẠO FILE MP3 ---
+st.subheader("🔊 Thiết lập giọng đọc và phát âm thanh")
+
+if voice_names:
+    selected_voice_friendly = st.selectbox("Chọn giọng đọc chuẩn ngữ cảnh:", options=voice_names)
+    voice_id = voices_dict[selected_voice_friendly]
+    
+    btn_generate = st.button("🔥 Tạo âm thanh & Trình phát nhạc", type="secondary")
+    
+    if btn_generate:
+        if not translated_text.strip():
+            st.warning("Không có văn bản trong ô 'Bản dịch' để tạo giọng nói!")
         else:
-            eta_str = f"{eta_seconds} giây"
-
-        self.lbl_status.configure(
-            text=f"Đang tạo âm thanh... {percent}% | Thời gian còn lại: {eta_str}",
-            text_color="#3498db",
-        )
-        self.progress_bar.set(percent / 100)
-        self.update_idletasks()
-
-    def start_conversion(self):
-        if self.is_playing_preview:
-            pygame.mixer.music.stop()
-            pygame.mixer.music.unload()
-            self.is_playing_preview = False
-            self.btn_preview.configure(text="🔊 Nghe thử bản dịch", fg_color="#2ecc71")
-            self.cleanup_preview_file()
-
-        text = self.txt_translated.get("0.0", "end").strip()
-        selected_friendly = self.combo_voice.get()
-
-        if not text or text == "Kết quả dịch sẽ xuất hiện tại đây...":
-            messagebox.showwarning("Thông báo", "Vui lòng nhập và bấm dịch văn bản trước khi xuất MP3!")
-            return
-
-        voice_id = self.voices_dict.get(selected_friendly)
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".mp3", filetypes=[("MP3 Files", "*.mp3")]
-        )
-
-        if file_path:
-            self.btn_convert.configure(state="disabled", text="Đang xử lý xuất MP3...")
-            self.btn_preview.configure(state="disabled")
-            threading.Thread(
-                target=self.run_tts, args=(text, voice_id, file_path), daemon=True
-            ).start()
-
-    def run_tts(self, text, voice, file_path):
-        try:
-            asyncio.run(TTSEngine.convert_to_mp3(text, voice, file_path, self.update_progress))
-            self.lbl_status.configure(text="Hoàn thành xuất file!", text_color="#2ecc71")
-            messagebox.showinfo("Thành công", "Đã xuất file MP3 thành công!")
-        except Exception as e:
-            self.lbl_status.configure(text="Gặp lỗi xử lý!", text_color="#e74c3c")
-            messagebox.showerror("Lỗi", f"Có lỗi xảy ra: {str(e)}")
-        finally:
-            self.btn_convert.configure(state="normal", text="Xuất bản dịch ra file MP3")
-            self.btn_preview.configure(state="normal")
-            self.progress_bar.set(0)
-
-
-if __name__ == "__main__":
-    app = TTSApp()
-    app.mainloop()
+            # Tạo thanh tiến trình giả lập xử lý
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                # Gọi hàm xử lý bất đồng bộ kết hợp gộp file
+                audio_bytes = asyncio.run(convert_text_to_speech(translated_text, voice_id, progress_bar, status_text))
+                
+                status_text.text("Hoàn thành! Bạn đã có thể nghe hoặc tải file.")
+                
+                # Trình phát nhạc Web có sẵn của Streamlit
+                st.audio(audio_bytes, format="audio/mp3")
+                
+                # Nút cho phép người dùng tải file MP3 trực tiếp về máy cực tiện lợi
+                st.download_button(
+                    label="📥 Tải xuống file MP3 chính thức",
+                    data=audio_bytes,
+                    file_name="tts_translation_output.mp3",
+                    mime="audio/mp3",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"Có lỗi xảy ra trong quá trình tạo âm thanh: {e}")
+else:
+    st.warning("Không có giọng đọc nào tương thích được tìm thấy cho ngôn ngữ này!")
